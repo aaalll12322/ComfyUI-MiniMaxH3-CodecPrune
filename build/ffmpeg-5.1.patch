@@ -1,0 +1,171 @@
+On-Policy Codec Distillation for Efficient All-in-One Video Generation (CodecOPSD).
+
+Authors: Boyang Wang, Kevin Blackburn-Matzen, Oindrila Saha, Matheus Gadelha, Zezhou Cheng
+
+Copyright (c) 2026 The CodecOPSD Authors. All rights reserved.
+
+Codec pruning is a contribution of this paper; please cite it if you use, modify, or port this code.
+
+--- a/libavcodec/h264_mb.c
++++ b/libavcodec/h264_mb.c
+@@ -610,6 +610,18 @@
+         AV_WN16A(mb + index, value);
+ }
+ 
++/* Residual output (see h264idct_template.c): an n x n luma block without coded coefficients is set to 128. */
++static av_always_inline void fill_zero_residual(uint8_t *dst, int n, int linesize, int pixel_shift)
++{
++    for (int y = 0; y < n; y++) {
++        if (pixel_shift)
++            for (int x = 0; x < n; x++)
++                ((uint16_t *)(dst + y * linesize))[x] = 128;
++        else
++            memset(dst + y * linesize, 128, n);
++    }
++}
++
+ static av_always_inline void hl_decode_mb_predict_luma(const H264Context *h,
+                                                        H264SliceContext *sl,
+                                                        int mb_type, int simple,
+@@ -652,7 +664,8 @@
+                             idct_dc_add(ptr, sl->mb + (i * 16 + p * 256 << pixel_shift), linesize);
+                         else
+                             idct_add(ptr, sl->mb + (i * 16 + p * 256 << pixel_shift), linesize);
+-                    }
++                    } else
++                        fill_zero_residual(ptr, 8, linesize, pixel_shift);
+                 }
+             }
+         } else {
+@@ -696,7 +709,8 @@
+                             idct_dc_add(ptr, sl->mb + (i * 16 + p * 256 << pixel_shift), linesize);
+                         else
+                             idct_add(ptr, sl->mb + (i * 16 + p * 256 << pixel_shift), linesize);
+-                    }
++                    } else
++                        fill_zero_residual(ptr, 4, linesize, pixel_shift);
+                 }
+             }
+         }
+@@ -780,6 +794,8 @@
+                                                linesize,
+                                                sl->non_zero_count_cache + p * 5 * 8);
+             }
++        } else if (!IS_INTRA(mb_type)) {  // inter macroblock without coded luma residual (P_Skip or cbp 0)
++            fill_zero_residual(dest_y, 16, linesize, pixel_shift);
+         }
+     }
+ }
+--- a/libavcodec/h264idct_template.c
++++ b/libavcodec/h264idct_template.c
+@@ -30,6 +30,15 @@
+ #include "h264dec.h"
+ #include "h264idct.h"
+ 
++/* Residual output: the IDCT writes 128 + residual instead of adding the residual to the prediction, and a
++ * block without coded coefficients is set to 128 (zero residual) instead of keeping its prediction. */
++#define ZERO_RESIDUAL(dst, stride, n) do {                                        \
++    pixel *zr = (pixel *)(dst);                                                   \
++    for (int zy = 0; zy < (n); zy++, zr += (stride) / (int)sizeof(pixel))         \
++        for (int zx = 0; zx < (n); zx++)                                          \
++            zr[zx] = 128;                                                         \
++} while (0)
++
+ void FUNCC(ff_h264_idct_add)(uint8_t *_dst, int16_t *_block, int stride)
+ {
+     int i;
+@@ -57,10 +66,10 @@
+         const SUINT z2= (block[1 + 4*i]>>1) -  (SUINT)block[3 + 4*i];
+         const SUINT z3=  block[1 + 4*i]     + (SUINT)(block[3 + 4*i]>>1);
+ 
+-        dst[i + 0*stride]= av_clip_pixel(dst[i + 0*stride] + ((int)(z0 + z3) >> 6));
+-        dst[i + 1*stride]= av_clip_pixel(dst[i + 1*stride] + ((int)(z1 + z2) >> 6));
+-        dst[i + 2*stride]= av_clip_pixel(dst[i + 2*stride] + ((int)(z1 - z2) >> 6));
+-        dst[i + 3*stride]= av_clip_pixel(dst[i + 3*stride] + ((int)(z0 - z3) >> 6));
++        dst[i + 0*stride]= av_clip_pixel(128 + ((int)(z0 + z3) >> 6));
++        dst[i + 1*stride]= av_clip_pixel(128 + ((int)(z1 + z2) >> 6));
++        dst[i + 2*stride]= av_clip_pixel(128 + ((int)(z1 - z2) >> 6));
++        dst[i + 3*stride]= av_clip_pixel(128 + ((int)(z0 - z3) >> 6));
+     }
+ 
+     memset(block, 0, 16 * sizeof(dctcoef));
+@@ -127,14 +136,14 @@
+         const unsigned b5 = (a3>>2) - (unsigned)a5;
+         const unsigned b7 =  (unsigned)a7 - (a1>>2);
+ 
+-        dst[i + 0*stride] = av_clip_pixel( dst[i + 0*stride] + ((int)(b0 + b7) >> 6) );
+-        dst[i + 1*stride] = av_clip_pixel( dst[i + 1*stride] + ((int)(b2 + b5) >> 6) );
+-        dst[i + 2*stride] = av_clip_pixel( dst[i + 2*stride] + ((int)(b4 + b3) >> 6) );
+-        dst[i + 3*stride] = av_clip_pixel( dst[i + 3*stride] + ((int)(b6 + b1) >> 6) );
+-        dst[i + 4*stride] = av_clip_pixel( dst[i + 4*stride] + ((int)(b6 - b1) >> 6) );
+-        dst[i + 5*stride] = av_clip_pixel( dst[i + 5*stride] + ((int)(b4 - b3) >> 6) );
+-        dst[i + 6*stride] = av_clip_pixel( dst[i + 6*stride] + ((int)(b2 - b5) >> 6) );
+-        dst[i + 7*stride] = av_clip_pixel( dst[i + 7*stride] + ((int)(b0 - b7) >> 6) );
++        dst[i + 0*stride] = av_clip_pixel( 128 + ((int)(b0 + b7) >> 6) );
++        dst[i + 1*stride] = av_clip_pixel( 128 + ((int)(b2 + b5) >> 6) );
++        dst[i + 2*stride] = av_clip_pixel( 128 + ((int)(b4 + b3) >> 6) );
++        dst[i + 3*stride] = av_clip_pixel( 128 + ((int)(b6 + b1) >> 6) );
++        dst[i + 4*stride] = av_clip_pixel( 128 + ((int)(b6 - b1) >> 6) );
++        dst[i + 5*stride] = av_clip_pixel( 128 + ((int)(b4 - b3) >> 6) );
++        dst[i + 6*stride] = av_clip_pixel( 128 + ((int)(b2 - b5) >> 6) );
++        dst[i + 7*stride] = av_clip_pixel( 128 + ((int)(b0 - b7) >> 6) );
+     }
+ 
+     memset(block, 0, 64 * sizeof(dctcoef));
+@@ -151,7 +160,7 @@
+     for( j = 0; j < 4; j++ )
+     {
+         for( i = 0; i < 4; i++ )
+-            dst[i] = av_clip_pixel( dst[i] + dc );
++            dst[i] = av_clip_pixel( 128 + dc );
+         dst += stride;
+     }
+ }
+@@ -166,7 +175,7 @@
+     for( j = 0; j < 8; j++ )
+     {
+         for( i = 0; i < 8; i++ )
+-            dst[i] = av_clip_pixel( dst[i] + dc );
++            dst[i] = av_clip_pixel( 128 + dc );
+         dst += stride;
+     }
+ }
+@@ -181,7 +190,8 @@
+         if(nnz){
+             if(nnz==1 && ((dctcoef*)block)[i*16]) FUNCC(ff_h264_idct_dc_add)(dst + block_offset[i], block + i*16*sizeof(pixel), stride);
+             else                                  FUNCC(ff_h264_idct_add   )(dst + block_offset[i], block + i*16*sizeof(pixel), stride);
+-        }
++        } else
++            ZERO_RESIDUAL(dst + block_offset[i], stride, 4);
+     }
+ }
+ 
+@@ -193,6 +203,7 @@
+     for(i=0; i<16; i++){
+         if(nnzc[ scan8[i] ])             FUNCC(ff_h264_idct_add   )(dst + block_offset[i], block + i*16*sizeof(pixel), stride);
+         else if(((dctcoef*)block)[i*16]) FUNCC(ff_h264_idct_dc_add)(dst + block_offset[i], block + i*16*sizeof(pixel), stride);
++        else                             ZERO_RESIDUAL(dst + block_offset[i], stride, 4);
+     }
+ }
+ 
+@@ -206,7 +217,8 @@
+         if(nnz){
+             if(nnz==1 && ((dctcoef*)block)[i*16]) FUNCC(ff_h264_idct8_dc_add)(dst + block_offset[i], block + i*16*sizeof(pixel), stride);
+             else                                  FUNCC(ff_h264_idct8_add   )(dst + block_offset[i], block + i*16*sizeof(pixel), stride);
+-        }
++        } else
++            ZERO_RESIDUAL(dst + block_offset[i], stride, 8);
+     }
+ }
+ 
+--- a/libavcodec/mpegutils.c
++++ b/libavcodec/mpegutils.c
+@@ -44,7 +44,7 @@
+     mb->src_x = dst_x + motion_x / motion_scale;
+     mb->src_y = dst_y + motion_y / motion_scale;
+     mb->source = direction ? 1 : -1;
+-    mb->flags = 0; // XXX: does mb_type contain extra information that could be exported here?
++    mb->flags = IS_SKIP(mb_type) ? 1 : 0; // bit 0: skipped macroblock
+     return 1;
+ }
+ 

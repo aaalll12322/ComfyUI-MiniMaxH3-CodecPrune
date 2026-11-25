@@ -1,0 +1,14 @@
+codecopsd-codec 0.1.0 contains FFmpeg 5.1 (https://ffmpeg.org), licensed under the GNU Lesser General Public License,
+version 2.1 or later. The license text is LICENSE.LGPL-2.1 in this folder.
+
+FFmpeg was changed with ffmpeg-5.1.patch (in this folder) and linked statically into _codec_reader.abi3.so.
+FFmpeg source: https://ffmpeg.org/releases/ffmpeg-5.1.tar.bz2
+(sha256 32b56fb01ce90d452958ae25e91c9564abf49ed5453c127bec23c63e530aa8fa)
+FFmpeg configure options:
+    --enable-pic --disable-asm --disable-autodetect --disable-everything --disable-programs --disable-doc
+    --disable-avdevice --disable-avfilter --disable-swscale --disable-swresample --disable-network
+    --enable-decoder=h264 --enable-decoder=h263 --enable-demuxer=mov --enable-parser=h264 --enable-protocol=file
+
+To link the reader with another build of FFmpeg 5.1, use codec_reader.o, the reader's object file (in this folder):
+    cc -shared codec_reader.o -o _codec_reader.abi3.so -L<FFmpeg>/lib -lavformat -lavcodec -lavutil -lm -latomic \
+        -pthread -Wl,-Bsymbolic -Wl,--exclude-libs,ALL

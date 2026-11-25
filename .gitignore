@@ -1,0 +1,13 @@
+# ffmpeg.exe is 87 MB -- too large for a git repo. Ship it with a release and drop it into
+# bin/ (bin/build_reader.sh can also fetch it via imageio-ffmpeg). Without it the plugin
+# falls back to the imageio-ffmpeg binary already present in every ComfyUI install.
+bin/ffmpeg.exe
+
+# build tree produced by build/build_reader.sh
+build/ffmpeg-5.1/
+build/ffmpeg-5.1.tar.bz2
+build/prefix/
+
+__pycache__/
+*.pyc
+*.pyo
